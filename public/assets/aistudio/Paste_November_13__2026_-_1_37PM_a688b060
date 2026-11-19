@@ -1,0 +1,636 @@
+TIC Survey: Build Script
+Version 0.1 · 13 November 2026 · Companion to the TIC Survey PRD
+0. How to use this script
+This is a build script you can follow step by step yourself, or paste section by section into an AI coding tool (Cursor, Claude Code, Lovable and similar). Each part is self-contained and ends with a short acceptance check. Build in the order given.
+What you are building: a web platform with two user types.
+• Creator (staff or researcher): signs in, builds surveys from sign language videos, shares a link, reviews signed answers.
+• Respondent (student): opens a link, needs no login and no reading, takes a practice run, then answers the survey in video.
+Inferred from your uploads [Assumption]. The hex label for the primary colour was too blurry to read, so I sampled the swatch (#034C58). The secondary swatch is yellow but its label showed the accent value, so I used a matching yellow (#F2BE3A). Please check both against your Figma file. The wireframe screen names (for example Q 4a to Q 4d) are read from a small screenshot, so the recording flow below is my best reading of it.
+1. Stack and project setup
+Recommended stack [Assumption]: Next.js (App Router) with TypeScript, Tailwind CSS, Supabase (Postgres, Auth, Storage), and a service worker for offline support.
+npx create-next-app@latest tic-survey --typescript --tailwind --app --src-dir --eslint
+cd tic-survey
+npm i @supabase/supabase-js @supabase/ssr zustand idb-keyval lucide-react clsx zod
+npm i @serwist/next && npm i -D serwist
+Folder structure:
+src/
+  app/
+    page.tsx                      Landing page
+    (creator)/
+      login/page.tsx
+      dashboard/page.tsx          List of surveys
+      surveys/new/page.tsx
+      surveys/[id]/edit/page.tsx  Survey builder
+      surveys/[id]/responses/page.tsx
+    s/[slug]/page.tsx             Respondent experience
+    api/
+      respondent/start/route.ts
+      respondent/upload-url/route.ts
+      respondent/submit/route.ts
+  components/
+    landing/ (Navbar, Hero)
+    creator/ (QuestionCard, OptionEditor, VideoPicker)
+    respondent/ (Stage, SignerCard, OptionCard, Recorder, ReviewList)
+    ui/ (Button, Logo)
+  lib/ (supabase.ts, recorder.ts, offline.ts, schema.ts)
+Acceptance check: npm run dev serves the default page with Tailwind working.
+2. Design tokens
+Fonts: Inter for headings, Source Sans Pro for body (Google Fonts now serves it as Source Sans 3).
+// src/app/layout.tsx
+import { Inter, Source_Sans_3 } from 'next/font/google';
+import './globals.css';
+
+const heading = Inter({ subsets: ['latin'], variable: '--font-heading', display: 'swap' });
+const body = Source_Sans_3({ subsets: ['latin'], variable: '--font-body', display: 'swap' });
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang='en' className={`${heading.variable} ${body.variable}`}>
+      <body className='bg-white font-body text-ink antialiased'>{children}</body>
+    </html>
+  );
+}
+// tailwind.config.ts
+import type { Config } from 'tailwindcss';
+
+export default {
+  content: ['./src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        primary: '#034C58',   // deep teal, check against Figma
+        secondary: '#F2BE3A', // yellow
+        accent: '#0088B9',    // blue
+        ink: { DEFAULT: '#151515', soft: '#373737' },
+        grey: { DEFAULT: '#999EA1', line: '#E0E0E0', mist: '#EEEEEE', snow: '#F4F4F4' },
+      },
+      fontFamily: {
+        heading: ['var(--font-heading)', 'system-ui', 'sans-serif'],
+        body: ['var(--font-body)', 'system-ui', 'sans-serif'],
+      },
+      borderRadius: { card: '24px', control: '10px' },
+    },
+  },
+} satisfies Config;
+Global rules (put in globals.css):
+• Headings use font-heading, weight 600 to 700, tight leading.
+• Body text uses font-body, minimum 18px in the respondent experience.
+• Minimum touch target 56px high in the respondent experience.
+• Visible focus ring: 3px accent outline with 2px offset.
+• Respect prefers-reduced-motion.
+Acceptance check: a test page shows Inter headings, Source Sans body, and all colour tokens.
+3. Shared UI: Button and Logo
+// src/components/ui/Button.tsx
+import clsx from 'clsx';
+
+type Props = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: 'dark' | 'outline' | 'teal' | 'yellow';
+  size?: 'md' | 'lg';
+};
+
+export function Button({ variant = 'dark', size = 'md', className, ...rest }: Props) {
+  return (
+    <button
+      {...rest}
+      className={clsx(
+        'inline-flex items-center justify-center gap-2 rounded-control font-body font-medium transition',
+        'focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-accent',
+        'disabled:cursor-not-allowed disabled:opacity-50',
+        size === 'md' ? 'h-12 px-6 text-base' : 'h-16 px-10 text-xl',
+        variant === 'dark' && 'bg-ink text-white hover:bg-ink-soft',
+        variant === 'outline' && 'border border-ink bg-white text-ink hover:bg-grey-snow',
+        variant === 'teal' && 'bg-primary text-white hover:opacity-90',
+        variant === 'yellow' && 'bg-secondary text-ink hover:opacity-90',
+        className
+      )}
+    />
+  );
+}
+The logo is a speech-bubble mark containing a hand, followed by the word TIC SURVEY in Inter, weight 800, 18px. Export it from Figma as SVG into public/logo.svg.
+4. Landing page (one page, matches your hero exactly)
+Layout taken from the first image:
+• White background, content width about 1320px, 90px side margins at desktop.
+• Navbar: logo left; links Home, About, Resources, Contact centred; dark Create Survey button right (radius about 10px).
+• Hero: centred two-line headline, Accessible Surveys, Designed Without Barriers, in Inter semibold at about 48px. Below it, grey body text, centred, about 20px, max width about 880px. Then two buttons side by side: an outlined Intro Video button with a play icon, and a dark Get Started button.
+• Hero video: full content width, about 460px tall, radius about 24px, a poster image of a person signing, with a round translucent play button centred.
+// src/components/landing/Navbar.tsx
+import Link from 'next/link';
+import Image from 'next/image';
+import { Button } from '@/components/ui/Button';
+
+const links = [
+  { href: '#home', label: 'Home' },
+  { href: '#about', label: 'About' },
+  { href: '#resources', label: 'Resources' },
+  { href: '#contact', label: 'Contact' },
+];
+
+export function Navbar() {
+  return (
+    <header className='mx-auto flex max-w-[1320px] items-center justify-between px-6 py-8 md:px-0'>
+      <Link href='/' aria-label='TIC Survey home'>
+        <Image src='/logo.svg' alt='TIC Survey' width={140} height={36} priority />
+      </Link>
+      <nav aria-label='Primary' className='hidden gap-8 md:flex'>
+        {links.map((l) => (
+          <a key={l.href} href={l.href} className='text-base text-ink hover:underline'>{l.label}</a>
+        ))}
+      </nav>
+      <Link href='/login'><Button>Create Survey</Button></Link>
+    </header>
+  );
+}
+// src/components/landing/Hero.tsx
+'use client';
+import { useRef, useState } from 'react';
+import Link from 'next/link';
+import { Play } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+
+export function Hero() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+
+  const play = () => {
+    videoRef.current?.play();
+    videoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  return (
+    <section id='home' className='mx-auto max-w-[1320px] px-6 pb-20 text-center md:px-0'>
+      <h1 className='mx-auto max-w-3xl font-heading text-4xl font-semibold leading-tight md:text-5xl'>
+        Accessible Surveys,<br />Designed Without Barriers
+      </h1>
+      <p className='mx-auto mt-5 max-w-[880px] text-lg text-ink-soft md:text-xl'>
+        Tech For Independent Communication transforms surveys for deaf and hard-of-hearing
+        students into seamless, video-first sign language experiences built on dignity,
+        independence, and speed.
+      </p>
+
+      <div className='mt-8 flex flex-wrap justify-center gap-4'>
+        <Button variant='outline' size='lg' onClick={play}>
+          <Play size={20} aria-hidden /> Intro Video
+        </Button>
+        <Link href='/login'><Button size='lg'>Get Started</Button></Link>
+      </div>
+
+      <div className='relative mx-auto mt-12 aspect-[1333/463] overflow-hidden rounded-card bg-grey-mist'>
+        <video
+          ref={videoRef}
+          className='h-full w-full object-cover'
+          poster='/hero-poster.jpg'
+          controls={playing}
+          playsInline
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+        >
+          <source src='/intro-gsl.mp4' type='video/mp4' />
+        </video>
+        {!playing && (
+          <button
+            onClick={play}
+            aria-label='Play intro video'
+            className='absolute left-1/2 top-1/2 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/60 bg-black/30 text-white backdrop-blur'
+          >
+            <Play fill='white' />
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+// src/app/page.tsx
+import { Navbar } from '@/components/landing/Navbar';
+import { Hero } from '@/components/landing/Hero';
+
+export default function Home() {
+  return (
+    <main>
+      <Navbar />
+      <Hero />
+      {/* Optional one-page sections: #about, #resources, #contact (see 4.1) */}
+    </main>
+  );
+}
+4.1 Remaining one-page sections. You asked for a simple one pager, so after the hero add only three short sections with matching anchors: About (the problem and the pilot result in two or three sentences), Resources (links to a guide for creators and a guide for facilitators), and Contact (email and social links). Keep each under one screen height.
+Acceptance check: at 1500px wide the page matches the first screenshot. At 390px the nav collapses to logo plus button, and the hero remains readable.
+5. Database schema (Supabase / Postgres)
+create extension if not exists pgcrypto;
+
+create table organisations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz default now()
+);
+
+create table profiles (
+  id uuid primary key references auth.users on delete cascade,
+  organisation_id uuid references organisations,
+  full_name text,
+  role text not null default 'creator' check (role in ('owner','creator','reviewer'))
+);
+
+create table surveys (
+  id uuid primary key default gen_random_uuid(),
+  organisation_id uuid not null references organisations,
+  title text not null,
+  slug text unique not null,
+  status text not null default 'draft' check (status in ('draft','published','closed')),
+  intro_video_path text,
+  outro_video_path text,
+  created_by uuid references profiles,
+  created_at timestamptz default now()
+);
+
+create table questions (
+  id uuid primary key default gen_random_uuid(),
+  survey_id uuid not null references surveys on delete cascade,
+  position int not null,
+  kind text not null check (kind in ('single','multi','signed')),
+  required boolean default true,
+  video_path text not null,
+  label text,                    -- internal note for creators, never shown to students
+  unique (survey_id, position)
+);
+
+create table options (
+  id uuid primary key default gen_random_uuid(),
+  question_id uuid not null references questions on delete cascade,
+  position int not null,
+  video_path text not null,
+  thumb_path text,
+  label text                     -- for exports, for example 'Yes'
+);
+
+create table sessions (
+  id uuid primary key default gen_random_uuid(),
+  survey_id uuid not null references surveys,
+  status text not null default 'in_progress' check (status in ('in_progress','completed')),
+  started_at timestamptz default now(),
+  completed_at timestamptz
+);
+
+create table responses (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions on delete cascade,
+  question_id uuid not null references questions,
+  option_ids uuid[],             -- single and multi questions
+  video_path text,               -- signed questions
+  transcript text,               -- written by a reviewer later
+  reviewed boolean default false,
+  unique (session_id, question_id)
+);
+
+-- Storage buckets
+-- question-media: survey videos and thumbnails (read via signed URLs)
+-- response-videos: students' recordings (private, creators of that organisation only)
+Row-level security rules to apply:
+• Creators can read and write only rows whose survey belongs to their organisation.
+• Respondents never touch tables directly. All respondent actions go through the three API routes in section 8, using the service role key on the server.
+• The response-videos bucket is private. Reviewers get short-lived signed URLs only.
+Acceptance check: two test creators in different organisations cannot see each other's surveys or recordings.
+6. Creator side
+6.1 Screens
+Route
+Purpose
+/login
+Email magic link. Simple form, no passwords.
+/dashboard
+Table of surveys with status, response count, New survey button.
+/surveys/new
+Name the survey, then redirect to the builder.
+/surveys/[id]/edit
+The builder (below).
+/surveys/[id]/responses
+Review answers and export.
+6.2 Survey builder behaviour
+The builder is a two-column page. The left column is an ordered list of question cards. The right column is a live preview that renders the student view of the selected question.
+Each question card contains:
+1.  Type selector: Single choice, Multiple choice, Signed answer.
+2.  Question video: upload a file or record in the browser (uses the same recorder as section 7). Show a thumbnail and duration. A question cannot be saved without a video.
+3.  Options (single and multiple choice only): 2 to 4 option cards, each with its own video and an optional thumbnail. Reordering by drag handles and keyboard arrows.
+4.  Internal label: a text note for creators, for example Q3 Do you feel safe at school. Never shown to students.
+5.  Required toggle.
+Survey-level controls: intro video and closing video (both optional, defaults provided), Preview as student, Publish (validates every question has video and every choice question has at least two options), Copy share link, Close survey.
+// src/lib/schema.ts
+import { z } from 'zod';
+
+export const optionSchema = z.object({
+  id: z.string().uuid().optional(),
+  videoPath: z.string().min(1),
+  thumbPath: z.string().optional(),
+  label: z.string().optional(),
+});
+
+export const questionSchema = z
+  .object({
+    id: z.string().uuid().optional(),
+    kind: z.enum(['single', 'multi', 'signed']),
+    videoPath: z.string().min(1, 'Add a sign language video'),
+    label: z.string().optional(),
+    required: z.boolean().default(true),
+    options: z.array(optionSchema).max(4).default([]),
+  })
+  .refine((q) => q.kind === 'signed' || q.options.length >= 2, {
+    message: 'Choice questions need at least two options',
+    path: ['options'],
+  });
+
+export type QuestionInput = z.infer<typeof questionSchema>;
+6.3 Responses page
+• Filter by question. Show a grid of respondents, each cell showing the chosen option or a play button for a signed answer.
+• Video player with speed control (0.5x, 0.75x, 1x). A reviewer can add a written transcript and tick Reviewed.
+• Summary chart for each choice question (counts per option).
+• Export CSV for choice answers. Export videos as a zip with a manifest.
+Acceptance check: a creator can build a three-question survey (one single choice, one multiple choice, one signed), publish it and copy a working link in under five minutes.
+7. Respondent side
+Opened at /s/[slug]. No login, no typing, no reading. Every screen has one signer video and a very small number of large controls.
+7.1 Visual language (from your hi-fi wireframes)
+• Soft, light gradient background (warm cream blending into pale blue), never a plain grey.
+• A large rounded signer card on the left or centre showing the question video.
+• Answer options appear as a row or grid of rounded video thumbnail cards. A selected card gets a 3px teal border and a tick badge.
+• A single deep teal primary button (Next, Record, Submit) at the bottom of the content.
+• Recording screens: signer video on the left, the student's own camera preview on the right, a clear red record button, and a visible countdown before recording starts.
+• A slim progress indicator at the top, drawn as dots or a bar with no numbers.
+7.2 Flow
+This follows the screens in your wireframe file.
+Step
+Screen
+Notes
+1
+Welcome
+Intro GSL video plays automatically (muted fallback with play button). Button: Start.
+2
+Practice area
+Signer says: let us take a quick practice test. Buttons: Start practice, Skip.
+3
+Practice Q1 to Q2
+Choice questions using harmless topics, for example a favourite colour.
+4
+Camera permission
+Visual guide to allowing the camera. Error state if denied, with a retry button.
+5
+Practice recording
+Loading, then countdown 3, 2, 1, then recording, then preview with Keep, Record again, Delete.
+6
+Ready
+Signer says: amazing, now let us do the real thing. Button: Begin.
+7
+Real questions
+Choice questions and signed questions in the order set by the creator.
+8
+Review answers
+List of all answers as small thumbnails (chosen option or recording). Tapping one returns to that question.
+9
+Congratulations
+Closing GSL video and celebratory visual. No further action required.
+The practice Q3 detour in your file suggests an alternative path if the student struggles. Implement it as: if the student has not interacted for 20 seconds, the signer replays the question once, then a gentle hint arrow points to the options.
+7.3 State machine
+// src/components/respondent/useFlow.ts
+import { create } from 'zustand';
+
+type Step =
+  | 'welcome' | 'practice-intro' | 'practice-q' | 'permission'
+  | 'practice-record' | 'ready' | 'question' | 'review' | 'done';
+
+type Answer = { optionIds?: string[]; recordingKey?: string };
+
+interface Flow {
+  step: Step;
+  index: number;                    // current real question
+  answers: Record<string, Answer>;  // keyed by question id
+  go: (s: Step) => void;
+  answer: (qid: string, a: Answer) => void;
+  next: (total: number) => void;
+  back: () => void;
+  jumpTo: (i: number) => void;
+}
+
+export const useFlow = create<Flow>((set, get) => ({
+  step: 'welcome',
+  index: 0,
+  answers: {},
+  go: (step) => set({ step }),
+  answer: (qid, a) => set((s) => ({ answers: { ...s.answers, [qid]: a } })),
+  next: (total) => {
+    const { index } = get();
+    if (index + 1 >= total) set({ step: 'review' });
+    else set({ index: index + 1, step: 'question' });
+  },
+  back: () => set((s) => ({ index: Math.max(0, s.index - 1) })),
+  jumpTo: (i) => set({ index: i, step: 'question' }),
+}));
+7.4 Core components
+// src/components/respondent/Stage.tsx: shared background and layout
+export function Stage({ children, progress }: { children: React.ReactNode; progress?: number }) {
+  return (
+    <div className='min-h-screen bg-gradient-to-br from-[#FBF4E4] via-white to-[#E6F1F6]'>
+      {progress !== undefined && (
+        <div className='h-2 w-full bg-grey-mist' role='progressbar' aria-valuenow={Math.round(progress * 100)}>
+          <div className='h-full bg-primary transition-all' style={{ width: `${progress * 100}%` }} />
+        </div>
+      )}
+      <div className='mx-auto flex min-h-[calc(100vh-8px)] max-w-6xl flex-col justify-center gap-8 px-6 py-10 lg:flex-row lg:items-center'>
+        {children}
+      </div>
+    </div>
+  );
+}
+// src/components/respondent/SignerCard.tsx
+'use client';
+import { useRef } from 'react';
+import { RotateCcw } from 'lucide-react';
+
+export function SignerCard({ src, autoPlay = true }: { src: string; autoPlay?: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  return (
+    <div className='relative w-full overflow-hidden rounded-card bg-white shadow-lg lg:w-1/2'>
+      <video ref={ref} src={src} autoPlay={autoPlay} playsInline muted={false}
+             className='aspect-[4/5] w-full object-cover' />
+      <button
+        aria-label='Watch again'
+        onClick={() => { if (ref.current) { ref.current.currentTime = 0; ref.current.play(); } }}
+        className='absolute bottom-4 right-4 grid h-14 w-14 place-items-center rounded-full bg-white/90 shadow'
+      >
+        <RotateCcw />
+      </button>
+    </div>
+  );
+}
+// src/components/respondent/OptionCard.tsx
+import clsx from 'clsx';
+import { Check } from 'lucide-react';
+
+export function OptionCard({ src, thumb, selected, onSelect }:
+  { src: string; thumb?: string; selected: boolean; onSelect: () => void }) {
+  return (
+    <button
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={clsx(
+        'relative aspect-square w-full overflow-hidden rounded-card border-[3px] bg-white transition',
+        selected ? 'border-primary' : 'border-transparent hover:border-grey-line'
+      )}
+    >
+      <video src={src} poster={thumb} muted loop playsInline
+             onMouseEnter={(e) => e.currentTarget.play()}
+             onMouseLeave={(e) => e.currentTarget.pause()}
+             onFocus={(e) => e.currentTarget.play()}
+             className='h-full w-full object-cover' />
+      {selected && (
+        <span className='absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-primary text-white'>
+          <Check size={20} />
+        </span>
+      )}
+    </button>
+  );
+}
+On touch devices, tapping an option card plays its video once and selects it. The Next button stays disabled until at least one option is chosen (for required questions).
+7.5 Sign recording
+Use MediaRecorder. Ask for 720p at 30fps, because sign language needs smooth, clear motion.
+// src/lib/recorder.ts
+import { useRef, useState, useCallback } from 'react';
+
+type Phase = 'idle' | 'asking' | 'denied' | 'countdown' | 'recording' | 'review';
+
+export function useSignRecorder(maxSeconds = 120) {
+  const [phase, setPhase] = useState<Phase>('idle');
+  const [count, setCount] = useState(3);
+  const [blob, setBlob] = useState<Blob | null>(null);
+  const stream = useRef<MediaStream | null>(null);
+  const rec = useRef<MediaRecorder | null>(null);
+  const chunks = useRef<Blob[]>([]);
+
+  const open = useCallback(async () => {
+    setPhase('asking');
+    try {
+      stream.current = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720, frameRate: 30, facingMode: 'user' },
+        audio: false,
+      });
+      setPhase('idle');
+      return stream.current;
+    } catch {
+      setPhase('denied');
+      return null;
+    }
+  }, []);
+
+  const start = useCallback(() => {
+    if (!stream.current) return;
+    setPhase('countdown');
+    let n = 3;
+    setCount(n);
+    const t = setInterval(() => {
+      n -= 1;
+      setCount(n);
+      if (n === 0) {
+        clearInterval(t);
+        chunks.current = [];
+        const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+          ? 'video/webm;codecs=vp9' : 'video/mp4';
+        rec.current = new MediaRecorder(stream.current!, { mimeType: mime, videoBitsPerSecond: 2_500_000 });
+        rec.current.ondataavailable = (e) => e.data.size && chunks.current.push(e.data);
+        rec.current.onstop = () => { setBlob(new Blob(chunks.current, { type: mime })); setPhase('review'); };
+        rec.current.start(1000);
+        setPhase('recording');
+        setTimeout(() => rec.current?.state === 'recording' && rec.current.stop(), maxSeconds * 1000);
+      }
+    }, 1000);
+  }, [maxSeconds]);
+
+  const stop = useCallback(() => rec.current?.stop(), []);
+  const discard = useCallback(() => { setBlob(null); setPhase('idle'); }, []);
+  const close = useCallback(() => stream.current?.getTracks().forEach((t) => t.stop()), []);
+
+  return { phase, count, blob, stream, open, start, stop, discard, close };
+}
+The recording screen must show: the question video on one side, the live self-view on the other (mirrored), a large red Record button, a big countdown, and a Stop button. The review state offers three clear buttons with icons: Keep (teal), Record again (outline), Delete (outline, red icon). Nothing is stored on the server until the student reaches the review list and finishes.
+7.6 Review answers screen
+• A vertical list, one row per question: small question thumbnail on the left, the chosen option thumbnail or recording thumbnail on the right, and an Edit icon button.
+• Bottom: a large teal Submit button. Pressing it shows a one-tap confirmation card with a signer video: are you finished.
+Acceptance check: a first-time tablet user, given only the link, can finish a five-question survey without help, and can re-record and delete a recording at any point before submitting.
+8. API routes and data flow
+All three routes run on the server with the Supabase service role key.
+Route
+Method
+Behaviour
+/api/respondent/start
+POST
+Takes the slug, checks the survey is published, creates a sessions row, returns the session id plus the question and option list with signed media URLs.
+/api/respondent/upload-url
+POST
+Takes session id and question id, returns a signed upload URL into response-videos/{session}/{question}.webm.
+/api/respondent/submit
+POST
+Takes session id and answers, validates required questions, writes responses, marks the session completed.
+// src/app/api/respondent/upload-url/route.ts
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { z } from 'zod';
+
+const body = z.object({ sessionId: z.string().uuid(), questionId: z.string().uuid() });
+
+export async function POST(req: Request) {
+  const parsed = body.safeParse(await req.json());
+  if (!parsed.success) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+
+  const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  const { data: session } = await db.from('sessions').select('id,status').eq('id', parsed.data.sessionId).single();
+  if (!session || session.status !== 'in_progress') return NextResponse.json({ error: 'Invalid session' }, { status: 403 });
+
+  const path = `${parsed.data.sessionId}/${parsed.data.questionId}.webm`;
+  const { data, error } = await db.storage.from('response-videos').createSignedUploadUrl(path);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ path, ...data });
+}
+9. Offline and reliability
+Schools may have poor connectivity, so the respondent experience must tolerate it.
+1.  Register a service worker (Serwist) that precaches the respondent shell and runtime-caches survey videos once a survey has been started.
+2.  Keep answers and recorded blobs in IndexedDB with idb-keyval, keyed by session and question. Never rely on memory alone.
+3.  On submit, upload recordings one at a time with retry and exponential back-off. Show a simple visual state (waiting, sending, sent) with icons only.
+4.  If the browser goes offline mid-survey, continue normally and show a small offline icon. Sync automatically when the connection returns.
+5.  If the tab is closed, resuming the link restores the session and answers from IndexedDB.
+// src/lib/offline.ts
+import { set, get, del } from 'idb-keyval';
+
+export const saveRecording = (sid: string, qid: string, blob: Blob) => set(`rec:${sid}:${qid}`, blob);
+export const loadRecording = (sid: string, qid: string) => get<Blob>(`rec:${sid}:${qid}`);
+export const clearRecording = (sid: string, qid: string) => del(`rec:${sid}:${qid}`);
+
+export async function uploadWithRetry(url: string, blob: Blob, tries = 5) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url, { method: 'PUT', body: blob, headers: { 'Content-Type': blob.type } });
+      if (res.ok) return true;
+    } catch { /* offline, retry */ }
+    await new Promise((r) => setTimeout(r, 1000 * 2 ** i));
+  }
+  return false;
+}
+10. Accessibility, privacy and safety checklist
+• Respondent screens use no required reading. Any text is secondary and optional.
+• Every interactive element is keyboard reachable and has an accessible name (for the benefit of facilitators and creators).
+• Contrast meets WCAG 2.2 AA. Teal on white and white on teal both pass, but check yellow text on white (it fails, so use yellow only as a fill with dark text).
+• Students are never asked for their name, email or any identifier. Sessions are anonymous unless the creator adds cohort codes later.
+• Recordings are private, encrypted at rest, and viewable only by creators and reviewers in the owning organisation.
+• A facilitator in the room cannot see answers, because the review list shows only to the student.
+• Add a written data protection notice and consent step, signed off for Ghana's Data Protection Act, 2012 (Act 843), before real pupils use the product.
+11. Build order and milestones
+1.  Setup, tokens, Button, logo (sections 1 to 3).
+2.  Landing page matching the hero screenshot (section 4).
+3.  Supabase project, schema, row-level security (section 5).
+4.  Creator login, dashboard and builder with video upload (section 6).
+5.  Respondent flow with choice questions only (sections 7.2 to 7.4).
+6.  Sign recording, review screen and submission (sections 7.5, 7.6, 8).
+7.  Responses page, playback and export (section 6.3).
+8.  Offline support (section 9).
+9.  Usability testing with deaf students, mentors and interpreters, then fixes.
+10.  Privacy review and pilot launch.
+12. Open questions
+1.  Please confirm the exact primary and secondary hex values from Figma.
+2.  Should the practice area be fixed content, or editable per organisation?
+3.  Is a signed answer the only open question type, or do you also want a visual rating (for example icons)?
+4.  Do you want students to reach the survey through a link only, or also with a short picture code on a shared tablet?
+5.  Are Supabase and Vercel acceptable, or must data be hosted in a particular country?
+6.  Who will record the GSL videos, and do creators need to record them inside the platform?

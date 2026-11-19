@@ -1,0 +1,6 @@
+{
+  "name": "TIC Survey",
+  "description": "Video-first sign language survey platform built on dignity, independence, and speed for deaf and hard-of-hearing students.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #034C58;
+  --color-primary-hover: #023A44;
+  --color-secondary: #F2BE3A;
+  --color-accent: #0088B9;
+  --color-ink: #151515;
+  --color-ink-soft: #373737;
+  --color-grey-muted: #999EA1;
+  --color-grey-line: #E0E0E0;
+  --color-grey-mist: #EEEEEE;
+  --color-grey-snow: #F4F4F4;
+
+  --font-heading: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-body: "Source Sans 3", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-card: 24px;
+  --radius-control: 10px;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-body);
+    color: var(--color-ink);
+    scroll-behavior: smooth;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  *:focus-visible {
+    outline: 3px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+.respondent-stage-bg {
+  background:
+    radial-gradient(62% 58% at 0% 0%, rgba(251, 239, 211, 0.85) 0%, rgba(251, 239, 211, 0) 68%),
+    radial-gradient(60% 60% at 100% 100%, rgba(213, 234, 240, 0.9) 0%, rgba(213, 234, 240, 0) 70%),
+    #FFFFFF;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

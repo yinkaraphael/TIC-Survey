@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 40" fill="none">
+  <path d="M20 4C11.163 4 4 10.716 4 19c0 8.284 7.163 15 16 15 2.48 0 4.828-.53 6.93-1.474L34 35l-2.056-6.168C34.48 26.208 36 22.773 36 19c0-8.284-7.163-15-16-15Z" fill="#151515"/>
+  <path d="M16.5 11.5v8.2M19.5 10.2v9.5M22.5 11v8.7M25.5 13.2v7.3M13.5 17.5l2.2 2.2M15.7 19.7c.4 3.4 2.4 5.5 5.4 5.5 3.1 0 4.9-2.1 4.9-5.3" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="46" y="26" fill="#151515" font-family="Plus Jakarta Sans, system-ui, sans-serif" font-size="18" font-weight="800" letter-spacing="0.02em">TIC SURVEY</text>
+</svg>
